@@ -78,10 +78,27 @@ if ! docker ps &>/dev/null; then
 fi
 
 # NVIDIA
+# memory.total 미보고 (unified memory 아키텍처: GB10/GB200/Grace/Jetson 등) 시
+# /proc/meminfo 의 시스템 RAM 을 가용 메모리로 추정. GPU_VRAM_OVERRIDE 환경변수로 강제 가능.
 if command -v nvidia-smi &>/dev/null; then
-  GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits | head -1)
-  ok "GPU: ${GPU_INFO}"
+  GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
   GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+
+  if [[ -n "${GPU_VRAM_OVERRIDE:-}" ]]; then
+    GPU_VRAM=$GPU_VRAM_OVERRIDE
+    ok "GPU: ${GPU_NAME} (override ${GPU_VRAM}MB)"
+  elif [[ "$GPU_VRAM" =~ ^[0-9]+$ ]]; then
+    ok "GPU: ${GPU_NAME} (${GPU_VRAM}MB)"
+  elif [[ "$GPU_NAME" =~ (GB10|GB200|GH200|Grace|Spark|Jetson|Tegra|DGX) ]]; then
+    # unified memory: VRAM 이라는 분리된 풀이 없음. 시스템 RAM 의 75% 를 GPU 가용으로 추정 (OS/타프로세스 마진).
+    # 정확한 가용치는 NVIDIA 도 동적으로만 결정 → 보수적 추정 후 모자라면 GPU_VRAM_OVERRIDE 로 조정.
+    SYS_MEM_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    GPU_VRAM=$(( SYS_MEM_KB / 1024 * 75 / 100 ))
+    ok "GPU: ${GPU_NAME} (unified memory — 시스템 RAM 75% 인 ${GPU_VRAM}MB 로 추정)"
+  else
+    warn "GPU '${GPU_NAME}' 의 VRAM 읽기 실패 ('$GPU_VRAM') → 0 으로 처리. 강제 지정 원하면 GPU_VRAM_OVERRIDE=24000 등으로 재실행"
+    GPU_VRAM=0
+  fi
 else
   warn "nvidia-smi 없음 → CPU 모드 (매우 느림)"
   GPU_VRAM=0
